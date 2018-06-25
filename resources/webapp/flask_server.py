@@ -1,6 +1,7 @@
-from flask import Flask, render_template, request, redirect, escape
+from flask import Flask, render_template, request, redirect, escape, session
 from main.vsearch import search4letters
 from main.DatabaseConnection import DatabaseConnection
+from resources.webapp.checker import check_logged_in
 
 app = Flask(__name__)
 
@@ -14,6 +15,7 @@ dbconfig = {'host': '127.0.0.1',
             'database': 'vsearchlogdb'}
 _SQL_insert_statement = """insert into log (phrase, letters, ip, browser_string, results) values (%s, %s, %s, %s, %s)"""
 _SQL_fetchall_statement = """select phrase, letters, ip, browser_string, results from log"""
+app.secret_key = 'YouWillNeverGuessMySecretKey'
 
 
 @app.route('/')
@@ -39,6 +41,7 @@ def init() -> '302':
 
 
 @app.route('/viewlog', methods=['GET'])
+@check_logged_in
 def showlog() -> 'html':
     with open(log_path) as log:
         for line in log:
@@ -49,6 +52,7 @@ def showlog() -> 'html':
 
 
 @app.route('/viewlogDB', methods=['GET'])
+@check_logged_in
 def showlogFromDB() -> 'html':
     with DatabaseConnection(dbconfig) as cursor:
         cursor.execute(_SQL_fetchall_statement)
@@ -76,6 +80,18 @@ def createLogList(list: []) -> []:
         for item in entry:
             logContent[-1].append(escape(item))
     return logContent
+
+
+@app.route('/login')
+def do_login() -> str:
+    session['logged_in'] = True
+    return 'You are now logged in.'
+
+
+@app.route('/logout')
+def do_logout() -> str:
+    session.pop('logged_in')
+    return 'You are now logged out.'
 
 
 if __name__ == '__main__':
