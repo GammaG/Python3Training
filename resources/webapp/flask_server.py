@@ -1,7 +1,8 @@
-from flask import Flask, render_template, request, redirect, escape, session
+from flask import Flask, render_template, request, redirect, escape, session, copy_current_request_context
 from main.vsearch import search4letters
 from main.DatabaseConnection import DatabaseConnection
 from resources.webapp.checker import check_logged_in
+from threading import Thread
 
 app = Flask(__name__)
 
@@ -26,11 +27,19 @@ def entry_page() -> 'html':
 
 @app.route('/search4', methods=['POST'])
 def do_search() -> 'html':
+    """copy_current_request_context makes sure that the flask context still exists if the Threads need it,
+     to make it working the log functions have to be in here then - ugly so I changed to dictionary"""
+
     phrase: str = request.form['phrase']
     letters: str = request.form['letters']
     results: str = str(search4letters(phrase, letters))
-    log_request(request, results)
-    save_log_in_database(request, results)
+    elementes = {"phrase": phrase, "letters": letters, "results": results, "remote_addr": request.remote_addr,
+                 "user_agent": request.user_agent.browser}
+    try:
+        Thread(target=log_request, kwargs=elementes).start()
+        Thread(target=save_log_in_database, kwargs=elementes).start()
+    except Exception as e:
+        print("There was problem while logging: " + str(e))
     return render_template('results.html', the_phrase=phrase, the_letters=letters, the_title="Your results:",
                            the_results=results)
 
@@ -43,34 +52,51 @@ def init() -> '302':
 @app.route('/viewlog', methods=['GET'])
 @check_logged_in
 def showlog() -> 'html':
-    with open(log_path) as log:
-        for line in log:
-            logContent.append([])
-            for item in line.split('|'):
-                logContent[-1].append(escape(item))
-    return render_template('viewlog.html', the_title='View Log', the_row_titles=titles, the_data=logContent)
+    try:
+        with open(log_path) as log:
+            for line in log:
+                logContent.append([])
+                for item in line.split('|'):
+                    logContent[-1].append(escape(item))
+        return render_template('viewlog.html', the_title='View Log', the_row_titles=titles, the_data=logContent)
+    except FileNotFoundError:
+        print('The data file is missing.')
+    except PermissionError:
+        print('The file writing wasn\'t allowed.')
+    except Exception as e:
+        print('An other error occured: ' + str(e))
 
 
 @app.route('/viewlogDB', methods=['GET'])
 @check_logged_in
 def showlogFromDB() -> 'html':
-    with DatabaseConnection(dbconfig) as cursor:
-        cursor.execute(_SQL_fetchall_statement)
-        logContent = createLogList(cursor.fetchall())
-    return render_template('viewlog.html', the_title='View Log', the_row_titles=titles, the_data=logContent)
+    try:
+        with DatabaseConnection(dbconfig) as cursor:
+            cursor.execute(_SQL_fetchall_statement)
+            logContent = createLogList(cursor.fetchall())
+        return render_template('viewlog.html', the_title='View Log', the_row_titles=titles, the_data=logContent)
+    except:
+        return '<h1>The database is not available please try later again.</h1>'
 
 
-def log_request(req: 'flask_request', res: str) -> None:
-    with open(log_path, 'a') as log:
-        print(req.form, req.remote_addr, req.user_agent, res,
-              file=log, sep='|')
+def log_request(phrase, letters, remote_addr, user_agent, results) -> None:
+    try:
+        with open(log_path, 'a') as log:
+            print("Phase: " + phrase + "; Letters:" + "letters", remote_addr, user_agent,
+                  results, file=log, sep='|')
+    except FileNotFoundError:
+        print('The data file is missing.')
+    except PermissionError:
+        print('The file writing wasn\'t allowed.')
+    except Exception as e:
+        # except: is the default one
+        print('An other error occured: ' + str(e))
 
 
-def save_log_in_database(req: 'flask_request', res: str) -> None:
+def save_log_in_database(phrase, letters, remote_addr, user_agent, results) -> None:
     """Use @DatabaseConnection Class to open a connection and insert values"""
     with DatabaseConnection(dbconfig) as cursor:
-        cursor.execute(_SQL_insert_statement,
-                       (req.form['phrase'], req.form['letters'], req.remote_addr, req.user_agent.browser, res))
+        cursor.execute(_SQL_insert_statement, (phrase, letters, remote_addr, user_agent, results))
 
 
 def createLogList(list: []) -> []:
